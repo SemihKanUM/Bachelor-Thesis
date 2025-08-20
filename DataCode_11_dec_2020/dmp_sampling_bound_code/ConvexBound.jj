@@ -1,0 +1,1367 @@
+options{
+  LOOKAHEAD = 2;
+  FORCE_LA_CHECK = true;  
+}
+
+ 
+PARSER_BEGIN(ConvexBound)
+
+//! This is based on the Newick parser found at http://olduvai.sourceforge.net/tj/tj-javadoc-public/Parser/Newick.html, thanks to the author!
+
+import java.util.*;
+import java.lang.Math.*;
+
+class TreeNode
+	{
+	TreeNode parent;
+	Vector children;
+	String name;
+	int num;
+
+	boolean quartetVector[];
+
+	boolean fitchVector[];
+
+	long g;
+	long h[];
+		
+	public TreeNode()
+		{
+		parent = null;
+		children = new Vector();
+		name = null;
+		num = -1;
+
+		g = 0;
+
+
+		h = null;
+
+		// h = new long[ ConvexBound.k + 1 ];
+
+		//! this just adds the TreeNode to a set so we can initialize the h vector later
+		ConvexBound.these_need_h_array.add( this );
+
+
+		//! this is just used for 2-state parsimony computations which I sloppily use to 
+		//! test compatibility...
+
+		quartetVector = new boolean[2];
+		}	
+
+
+	//! this is only needed at the very beginning, because k is not known at the point that the TreeNode
+	//! is created
+
+	public void create_h_array()
+		{
+		h = new long[ ConvexBound.k + 1 ];
+		}
+
+	public void reset()
+		{
+		if( children.size() != 0 )
+			{
+			TreeNode left = ((TreeNode)children.elementAt(0));
+			TreeNode right = ((TreeNode) children.elementAt(1));
+
+			left.reset();
+			right.reset();
+			}
+			
+		g = 0;
+		h = new long[ ConvexBound.k + 1 ];		
+		}
+
+	// This generates the which'th character. Assumes that count() has already been executed.
+	// Semantically this shadows the part of the count() method that counts the 'g' value.
+	// which indexes from 1
+	
+	public Vector getCharacter( long which )
+		{
+		if( (which > g) || (which <= 0) ) {
+					System.err.println("Error: asked for a character that does not exist: "+g);
+					System.exit(0);
+					}
+		// System.out.println("Asked for character..."+which);
+
+		if( children.size() == 0 )
+			{
+			Vector character = new Vector();
+			
+			Vector state = new Vector();
+
+			state.add( this );	// pointer to this leaf/taxon
+			character.add( state );
+			
+			return character;
+			}
+		else
+			{
+			int k = ConvexBound.k;
+			TreeNode left = ((TreeNode)children.elementAt(0));
+			TreeNode right = ((TreeNode) children.elementAt(1));
+
+			if( which <= left.g * right.g )
+				{
+				long leftChar = ((which-1) / right.g) + 1;
+				long rightChar = ((which-1) % right.g) + 1;		
+
+				Vector c1 = left.getCharacter( leftChar );
+				Vector c2 = right.getCharacter( rightChar );
+
+				//! this is simply the disjoint union...
+				c1.addAll(c2);			
+				return c1;
+				}			
+			else
+				{
+				long remains = which - (left.g*right.g);
+				
+				for( int i = 1; i <= k; i++ )
+				for( int j = 1; j <= k; j++ )
+					{
+					if( i + j >= k )
+						{
+						long subtract = left.h[i] * right.h[j];
+						
+						if( remains > subtract )
+							{
+							remains = remains - subtract;
+							continue;
+							}
+
+						//System.out.println("in...");
+						//System.out.println(right.h[j]);
+
+						long leftRootPair = ((remains-1) / right.h[j]) + 1;
+						long rightRootPair = ((remains-1) % right.h[j]) + 1;
+							
+						//System.out.println("out...");
+
+						//! output the merger based on the two states at the root
+							
+						Vector r1 = left.getRootPair( i, leftRootPair );
+						Vector r2 = right.getRootPair( j, rightRootPair );
+						
+						Vector s1 = (Vector) r1.elementAt(0);
+						Vector s2 = (Vector) r2.elementAt(0);
+						
+						s1.addAll( s2 );
+						r2.removeElementAt(0);
+						
+						r1.addAll( r2 );
+						
+						return r1;
+						}
+					}
+				
+				}
+			}
+		
+		//! Shouldn't get here...
+		System.out.println("Error...");
+		return null;
+		}
+
+
+	//! Returns a vector of vectors, which looks just like a character, the only difference is that
+	//! the very first vector in the vector is assumed to be the root state
+
+	//! This shadows the computation of the h[] values
+	
+	public Vector getRootPair( int m, long which )
+		{
+		if( (which > h[m]) || (which <= 0) ) {
+					System.err.println("Error: asked for a character-root pair that does not exist: "+m+", "+which);
+					System.exit(0);
+					}
+					
+		if( children.size() == 0 )
+			{
+			Vector character = new Vector();
+			
+			Vector state = new Vector();
+
+			state.add( this );	// pointer to this leaf/taxon
+			character.add( state );
+			
+			return character;
+			}
+
+		int k = ConvexBound.k;
+
+		TreeNode left = ((TreeNode)children.elementAt(0));
+		TreeNode right = ((TreeNode) children.elementAt(1));
+
+		if( m <= k-1 )
+			{
+			long remains = which;
+			
+			long subtract = (left.g * right.h[m]);
+			
+			if( remains <= subtract )
+				{
+				long leftChar = ((remains-1) / right.h[m]) + 1;
+				long rightRootPair = ((remains-1) % right.h[m]) + 1;
+
+				Vector one = left.getCharacter(leftChar);
+				Vector two = right.getRootPair(m, rightRootPair);
+				
+				two.addAll(one);
+				return two;
+				}
+			remains = remains - subtract;
+
+			subtract = (left.h[m] * right.g);
+
+			if( remains <= subtract )
+				{
+				long leftRootPair = ((remains-1) / right.g) + 1;
+				long rightChar = ((remains-1) % right.g) + 1;
+
+				Vector one = left.getRootPair(m, leftRootPair);
+				Vector two = right.getCharacter(rightChar);
+				
+				one.addAll(two);
+				return one;
+				}
+
+			remains = remains - subtract;
+				
+			//! Now the loop.....
+
+			for( int i = 1; i <= k-2; i++ )
+			for( int j = 1; j <= k-2; j++ )
+				{
+				if( i + j == m )
+					{
+					subtract = left.h[i] * right.h[j];
+
+					if( remains <= subtract )
+						{
+						long leftRootPair = ((remains-1) / right.h[j]) + 1;
+						long rightRootPair = ((remains-1) % right.h[j]) + 1;
+
+						Vector one = left.getRootPair(i, leftRootPair);
+						Vector two = right.getRootPair(j, rightRootPair);
+
+						Vector s1 = (Vector) one.elementAt(0);
+						Vector s2 = (Vector) two.elementAt(0);
+						
+						s1.addAll(s2);
+						two.removeElementAt(0);
+
+						one.addAll(two);
+						return one;
+						}
+
+					remains = remains - subtract;
+						
+					} // end i+j if 
+															
+				} // end for
+
+			System.out.println("Shouldn't get here either...");			
+			return null;
+			} // end m <= k -1
+		else
+			{
+			// m = k			
+			// h[k] += (left.g * right.h[k]) + (left.h[k] * right.g);
+
+			long remains = which;
+			
+			long subtract = (left.g * right.h[m]);
+			
+			if( remains <= subtract )
+				{
+				long leftChar = ((remains-1) / right.h[m]) + 1;
+				long rightRootPair = ((remains-1) % right.h[m]) + 1;
+
+				Vector one = left.getCharacter(leftChar);
+				Vector two = right.getRootPair(m, rightRootPair);
+				
+				two.addAll(one);
+				return two;
+				}
+			
+			remains = remains - subtract;
+
+			subtract = (left.h[m] * right.g);
+
+			if( remains <= subtract )
+				{
+				long leftRootPair = ((remains-1) / right.g) + 1;
+				long rightChar = ((remains-1) % right.g) + 1;
+
+				Vector one = left.getRootPair(m, leftRootPair);
+				Vector two = right.getCharacter(rightChar);
+				
+				one.addAll(two);
+				return one;
+				}
+
+			remains = remains - subtract;
+						
+			// for( int i = 1; i <= k; i++ )
+			// for( int j = 1; j <= k; j++ )
+			// 	{
+			//	if( i + j >= k ) h[k] += (left.h[i] * right.h[j]);				
+			//	}
+			
+			for( int i = 1; i <= k; i++ )
+			for( int j = 1; j <= k; j++ )
+				{
+				if( i + j >= k )
+					{
+					subtract = left.h[i] * right.h[j];
+
+					if( remains <= subtract )
+						{
+						long leftRootPair = ((remains-1) / right.h[j]) + 1;
+						long rightRootPair = ((remains-1) % right.h[j]) + 1;
+
+						Vector one = left.getRootPair(i, leftRootPair);
+						Vector two = right.getRootPair(j, rightRootPair);
+
+						Vector s1 = (Vector) one.elementAt(0);
+						Vector s2 = (Vector) two.elementAt(0);
+						
+						s1.addAll(s2);
+						two.removeElementAt(0);
+
+						one.addAll(two);
+						return one;
+						}
+
+					remains = remains - subtract;
+						
+					} // end i+j if 
+															
+				} // end for
+
+			System.out.println("Also shouldn't get here...");
+			return null;
+			}
+		
+		}
+			
+
+	public static void printCharacter(Vector c)
+		{
+		System.out.print("{");
+		
+		for(int loop=1; loop <= c.size(); loop++)
+			{
+			Vector state = (Vector) c.elementAt(loop - 1);
+
+			if( loop != 1 ) System.out.print(",");
+			System.out.print("{");
+
+			for(int scan=1; scan <= state.size(); scan++ )
+				{
+				if( scan != 1 ) System.out.print(",");
+				TreeNode tn = (TreeNode) state.elementAt(scan - 1);
+				System.out.print(tn.name);
+				}
+
+			System.out.print("}");
+			
+			}
+		
+		
+		System.out.println("}");
+		
+		}
+
+			
+		
+	//! --------------------------------------------------------------------------
+	//! This is the dynamic program. Run this before you start generating/sampling characters.
+	
+	public void count()
+		{
+		int k = ConvexBound.k;
+		
+		if( children.size() == 0 )
+			{
+			if(k==1) g = 1; else g = 0;
+			h[1] = 1;
+			
+			for( int loop = 2; loop <= k; loop++ ) h[loop] = 0;
+			}
+		else
+			{
+			TreeNode left = ((TreeNode)children.elementAt(0));
+			TreeNode right = ((TreeNode) children.elementAt(1));
+
+			left.count();
+			right.count();
+	
+			//! --------------------------------------------
+			//! Let's compute g...
+			
+			g += (left.g * right.g);
+			
+			for( int i = 1; i <= k; i++ )
+			for( int j = 1; j <= k; j++ )
+				{
+				if( i + j >= k )
+					{
+					g += (left.h[i] * right.h[j] );				
+					}
+				}
+			
+			//! -----------------------------------------------
+			//! Let's compute h...
+			
+			for( int m=1; m<=(k-1); m++ )
+				{
+				h[m] += (left.g * right.h[m]) + (left.h[m] * right.g);
+				
+				for( int i = 1; i <= k-2; i++ )
+				for( int j = 1; j <= k-2; j++ )
+					{
+					if( i + j == m ) h[m] += (left.h[i] * right.h[j]);				
+					}
+				}
+			
+			h[k] += (left.g * right.h[k]) + (left.h[k] * right.g);
+
+				for( int i = 1; i <= k; i++ )
+				for( int j = 1; j <= k; j++ )
+					{
+					if( i + j >= k ) h[k] += (left.h[i] * right.h[j]);				
+					}
+			
+			
+			
+			
+			}
+		
+		
+		}
+		
+		
+	public void addChild( TreeNode c )
+		{
+		children.add(c);
+		if(children.size() > 2)
+			{
+			System.out.println("An internal node has 3 or more children: this version of the code only works on binary trees.");
+			System.exit(0);
+			}
+		}	
+
+	public TreeNode getParent()
+		{
+		return parent;
+		}
+
+	public void setParent( TreeNode p )
+		{
+		this.parent = p;
+		} 
+
+	public void setName( String s )
+		{
+		name = s;
+		}
+
+	public String getName()
+		{
+		return name;
+		}
+
+	public void setNumber(int n)
+		{
+		num = n;
+		}
+
+	public Vector getChildren()
+		{
+		return children;
+		}
+
+		
+	public void explore( Vector leaves )
+		{
+		if( name != null ) leaves.add(this);
+
+		Enumeration e = children.elements();
+
+		while( e.hasMoreElements() )
+			{
+			((TreeNode) e.nextElement()).explore( leaves );
+			}
+		}
+
+
+	public int computeParsimony()
+		{		
+		if( fitchVector == null )
+			{
+			fitchVector = new boolean[ConvexBound.numStates];
+			}
+
+		if( children.size() == 0 )
+			{
+			//! System.out.println("I am a leaf, parsimony score is 0.");
+			return(0);
+			}
+
+		int scan = ConvexBound.numStates;
+
+		TreeNode left = ((TreeNode)children.elementAt(0));
+		TreeNode right = ((TreeNode) children.elementAt(1));
+		
+		int leftScore = left.computeParsimony();
+		int rightScore = right.computeParsimony();
+		
+		boolean intersect = false;
+		for(int x=0;x<scan;x++)
+			{
+			if(left.fitchVector[x] && right.fitchVector[x] )
+				{
+				intersect = true;
+				break;
+				}			
+			}
+			
+		int answer;
+		if( intersect == false )
+			{
+			answer = leftScore + rightScore + 1;
+			//! System.out.println("Union event.");
+			}
+		else answer = leftScore + rightScore;	
+		
+		for(int x=0;x<scan;x++)
+			{
+			if(intersect) this.fitchVector[x] = (left.fitchVector[x] && right.fitchVector[x] );
+			if(!intersect) this.fitchVector[x] = (left.fitchVector[x] || right.fitchVector[x] );			
+			}
+		return(answer);
+		}
+
+	public int twostateParsimony()
+		{		
+		if( children.size() == 0 )
+			{
+			// System.out.println("I am a leaf, parsimony score is 0.");
+			return(0);
+			}
+
+		TreeNode left = ((TreeNode)children.elementAt(0));
+		TreeNode right = ((TreeNode) children.elementAt(1));
+		
+		int leftScore = left.twostateParsimony();
+		int rightScore = right.twostateParsimony();
+		
+		boolean intersect = false;
+		for(int x=0;x<2;x++)
+			{
+			if(left.quartetVector[x] && right.quartetVector[x] )
+				{
+				intersect = true;
+				break;
+				}			
+			}
+			
+		int answer;
+		if( intersect == false )
+			{
+			answer = leftScore + rightScore + 1;
+			//! System.out.println("Union event.");
+			}
+		else answer = leftScore + rightScore;	
+		
+		for(int x=0;x<2;x++)
+			{
+			if(intersect) this.quartetVector[x] = (left.quartetVector[x] && right.quartetVector[x] );
+			if(!intersect) this.quartetVector[x] = (left.quartetVector[x] || right.quartetVector[x] );			
+			}
+		return(answer);
+		}
+
+
+	
+	}
+
+//! -------------------------------------------------------------------
+
+class ExploreTree
+	{	
+	private Vector leaves;
+
+	public ExploreTree( TreeNode root)
+		{
+		leaves = new Vector();
+		root.explore(leaves);	
+
+		int numLeaves = ConvexBound.numToName.size();
+		//! System.out.println("// There were "+numLeaves+" in total.");
+
+
+                Enumeration f = (root.getChildren()).elements();
+  
+                while( f.hasMoreElements() )
+                        {
+                        Object p = new ExploreTree( ((TreeNode) f.nextElement()));
+                        }
+
+		}
+
+	//! -----------
+
+
+	}
+
+
+//! ------------------------------------------
+
+public class ConvexBound {
+
+	public static Vector these_need_h_array;
+	
+	public static Hashtable nameToNum;
+	public static Hashtable numToName;
+
+	public static TreeNode numberToLeaf[][];
+
+	public static int numStates;
+
+	public static int INFINITY = 100000;
+	
+	public static int seenLeaves = 0;
+
+	public static TreeNode t1;
+
+	public static TreeNode t2;
+
+	public static final boolean DEBUG = false;
+
+	public static int getLeafNumber( String leaf )
+		{
+		if( nameToNum == null ) nameToNum = new Hashtable();
+
+		Integer i = (Integer) nameToNum.get( leaf );
+
+		if( i != null )
+			{
+			return i.intValue();
+			}
+
+		seenLeaves++;
+
+		i = new Integer(seenLeaves);
+
+		if(DEBUG) System.out.println("// Leaf '"+leaf+"' gets internal number "+seenLeaves);
+
+		nameToNum.put( leaf, i );
+
+		if( numToName == null )
+			{
+			numToName = new Hashtable();
+			}
+
+		numToName.put( i, leaf );
+
+		return seenLeaves;
+		}
+
+
+	public static String getLeafName( int num )
+		{
+		Integer i = new Integer(num);
+
+		if( numToName == null )
+			{
+			numToName = new Hashtable();
+			}
+
+		String s = (String) numToName.get( i );
+
+		return s;
+		}
+
+
+
+//! This assumes that t1, t2, numberToLeaf have already been filled in...
+
+public static void fillInQuartetStuff( int a, int b, int c, int d )
+	{
+	//! Set all the leaves to intersection events as an initialization step
+	for(int t=0; t<=1; t++)
+	{
+	for(int x=1; x<=seenLeaves; x++ )
+		{
+		numberToLeaf[t][x].quartetVector[0] = true;
+		numberToLeaf[t][x].quartetVector[1] = true;
+		}
+
+	//! set a and b to state 0
+	numberToLeaf[t][a].quartetVector[0] = true;
+	numberToLeaf[t][a].quartetVector[1] = false;
+
+	numberToLeaf[t][b].quartetVector[0] = true;
+	numberToLeaf[t][b].quartetVector[1] = false;
+
+	//! set c and d to state 1
+	numberToLeaf[t][c].quartetVector[0] = false;
+	numberToLeaf[t][c].quartetVector[1] = true;
+
+	numberToLeaf[t][d].quartetVector[0] = false;
+	numberToLeaf[t][d].quartetVector[1] = true;
+	}
+
+
+	}
+
+public static boolean isQuartetCompatible( int a, int b, int c, int d )
+	{
+	//! Just runs through the 3 different quartet topologies and for each one tests whether the parsimony scores differ.
+
+	int l, r;
+
+	fillInQuartetStuff(a,b,c,d);
+	l = t1.twostateParsimony();
+	r = t2.twostateParsimony();
+	//System.out.println(l+" vs. "+r);
+
+	if( l != r ) return false;
+
+	fillInQuartetStuff(a,c,b,d);
+	l = t1.twostateParsimony();
+	r = t2.twostateParsimony();
+	//System.out.println(l+" vs. "+r);
+
+	if( l != r ) return false;
+
+	fillInQuartetStuff(a,d,b,c);
+	l = t1.twostateParsimony();
+	r = t2.twostateParsimony();
+	//System.out.println(l+" vs. "+r);
+
+	if( l != r ) return false;
+
+	return true;
+
+	}
+
+
+  public static TreeNode tree;
+
+  public static TreeNode current_node;
+
+  private static TreeNode tn;  
+
+  public static int leaves = 0;
+  public static int trees = 0;
+
+  public static void parseTrees()
+	{
+	ConvexBound n = new ConvexBound(System.in);
+
+	try{ n.Input(); }
+	catch( ParseException e )
+		{
+		System.out.println("Parsing error!");
+	        e.printStackTrace();
+		System.exit(0);
+    		}
+
+  	}
+
+public static String VERSION = "ConvexBound.jj Version 1.1, August 2020, by Steven Kelk";
+
+public static boolean QUIET = true;
+
+public static boolean AGGRESSIVE = false;
+
+public static boolean SAMPLE = true;
+public static int NUM_SAMPLES = -1;	//! default is an infinite number of samples
+					//! I have (temporarily?) removed the option to be able to specify this
+
+public static int k = -1;		//! by default we sample convex characters with at least two taxa per state/block, unless we fear overflow due to the sampling
+					//! space being too large, in which case it will be increased to a safe level
+
+public static boolean userSpecifiedK = false;
+
+
+  public static void main(String args[])
+	{			
+	int loop = 0;
+
+	these_need_h_array = new Vector();
+	
+	numberToLeaf = new TreeNode[2][];
+	
+	while( loop < args.length )
+		{
+		if( args[loop].equals("-help") )
+			{
+
+			System.out.println("-----------------------------------------");
+			System.out.println(VERSION);
+			System.out.println("-----------------------------------------");
+			System.out.println("This code uses a random sampling strategy to produce lower bounds on d_MP and (if desired)");
+			System.out.println("upper bounds on d_TBR, for two unrooted binary trees on the same set of taxa. Note that it");
+			System.out.println("is much better at generating lower bounds than upper bounds! Given that d_MP <= d_TBR, the");
+			System.out.println("code terminates if the bounds match. For some trees d_MP < d_TBR so in these cases the code");
+			System.out.println("will not terminate.");
+			System.out.println("-----------------------------------------");
+			System.out.println("java ConvexBound [options] < treeFile.txt");
+			System.out.println("-----------------------------------------");
+			System.out.println("Options:");
+			System.out.println("-help    : displays this message.");
+			// System.out.println();
+			System.out.println("-k [arg] : sample only convex characters in which each state occurs on at least [arg] taxa, where arg >= 1.");
+			System.out.println("           *Warning*: the smaller the value of k, the larger the space of characters to sample from. If this space gets too large,");
+			System.out.println("           it can cause (sometimes silent) overflow errors. If you omit the -k flag, the code itself chooses a safe, but pessimistic, value for you.");
+			System.out.println("           If you do specify the -k flag, no overflow checking is done, so use it very carefully indeed!");
+			System.out.println("-verbose : print in addition to an improved bound the character/forest which achieves it and additional information.");
+			System.out.println("-ub      : switch on aggressive upper bound detection. This can slow the code down, since ALL sampled characters that");
+			System.out.println("           are convex on both trees are run through the agreement forest check, but on the positive side it can lead");
+			System.out.println("           to stronger upper bounds on d_TBR. Note that this tends to work better when the -k 1 option is set, but this");
+			System.out.println("           limits the number of taxa that can be handled and slows down lower bound detection.");
+			System.out.println("-----------------------------------------");
+//			System.out.println("Note 1: Due to the data structures used the -k 1 option is currently limited to 46 taxa, and -k 2 to 95. If the number of
+//characters in the sampling space grows too large, this can cause overflow errors. Be careful not to cause overflow: use -k at your own risk! If in doubt, omit the -k flag and
+// allow the code to choose a safe value.");
+			System.out.println("Note 1: For -k 2 the true d_MP distance will eventually be discovered, if the code is run");
+			System.out.println("        infinitely long... For instances up to around 35 taxa you can use the ConvexMPDist code instead to compute d_MP exactly.");
+			System.out.println("Note 2: For values of -k strictly higher than 2 the number of convex characters to sample from drops quickly.");
+			System.out.println("        There is then no guarantee of eventually discovering d_MP, but on the positive side random sampling is");
+			System.out.println("        much more likely to explore these spaces thoroughly in reasonable time.");
+			System.out.println("Note 3: For -k 1 the true d_MP distance AND the the true d_TBR distance will be discovered, if the code is run");
+			System.out.println("        infinitely long (but this infinity is in practice much larger than the -k 2 infinity...)");
+			System.out.println("Note 4: This program works best if the trees are already kernelized: the subtree reduction is particularly important.");
+			System.out.println("        Large common subtrees can induce huge numbers of convex characters that, with regard to bounds, behave equivalently.");
+			System.out.println("-----------------------------------------");
+			System.exit(0);
+			}
+		
+		if( args[loop].equals("-verbose"))
+			{
+			System.out.println("// Switching verbose mode on.");
+			loop++;
+			QUIET = false;
+			continue;
+			}
+		
+
+		if( args[loop].equals("-ub"))
+			{
+			System.out.println("// Switching on aggressive upper bound detection.");
+			loop++;
+			AGGRESSIVE = true;
+			continue;
+			}
+		
+
+
+		if( args[loop].equals("-k") )
+			{
+			loop++;
+			k = Integer.parseInt( args[loop] );
+			userSpecifiedK = true;
+			System.out.println("// User specified k = "+k+" -- this will not be overidden, so be careful you don't cause (silent) overflow errors!");
+			loop++;
+			continue;
+			}
+		
+		// if( args[loop].equals("-sample") )
+		//	{
+		//	loop++;
+		//	NUM_SAMPLES = Integer.parseInt( args[loop] );
+		//	loop++;
+		//	continue;
+		//	}
+			
+		}
+
+	
+	parseTrees();
+
+	}
+
+
+}	
+
+PARSER_END(ConvexBound)
+
+SKIP :
+{
+  " "
+| "\t"
+| "\n"
+| "\r"
+| "\f"
+| <comment: "[" ( ~["]"] )* "]"> 
+}
+
+void Input() :
+{ 
+  String s; 
+  double len;
+}
+{
+  (
+  { tree = new TreeNode(); current_node = tree; leaves = 0; } 
+  descendant_list() 
+  ( s = label() {}  )? 
+  ( ":" len = branch_length()   )? 
+  ";"
+	{        
+	trees++;
+	
+	if(DEBUG) System.out.println("// Processing tree "+trees+"...");
+
+	if( trees > 2 )
+		{
+		System.out.println("Exactly two trees are needed in the input -- we have encountered a third. Stopping");
+		System.exit(0);
+		}
+
+	if(trees == 1) ConvexBound.t1 = tree;
+	else
+	if(trees == 2) ConvexBound.t2 = tree;	
+
+        Vector leavesInTree = new Vector();
+        tree.explore(leavesInTree);
+
+	System.out.println("// Taxa in tree "+trees+": "+leavesInTree.size());
+
+
+
+	if(trees == 1 )
+	{
+		ConvexBound.numStates = seenLeaves;
+		// System.out.println("We will assume characters have at most "+ConvexBound.numStates+" states.");
+	}
+
+	//! This lets us map from taxa numbers into nodes
+	numberToLeaf[trees-1] = new TreeNode[seenLeaves+1];
+
+
+	Enumeration e = leavesInTree.elements();
+	while( e.hasMoreElements() )
+		{
+		TreeNode grab = (TreeNode) e.nextElement();
+		// System.out.println(grab.num);
+		numberToLeaf[trees-1][grab.num] = grab;	
+		}
+
+
+	//! Can't remember what this does....remove? 
+	Vector topchildren = tree.getChildren();
+	Enumeration tc = topchildren.elements();
+	while( tc.hasMoreElements() )
+		{
+		TreeNode tn = (TreeNode) tc.nextElement();
+		ExploreTree et = new ExploreTree(tn);
+		}		
+
+	// System.out.println("// ...done");
+
+
+	}
+ )*
+  <EOF>
+
+	{
+	if( trees != 2 )
+		{
+		System.out.println("Exactly two trees are required in the input. We saw only one. Stopping.");
+		System.exit(0);
+		}
+
+	// System.out.println("// Taxa in trees: "+ConvexBound.seenLeaves);
+
+
+	//! New code in 2020 --- sets a safe value of k
+
+
+	if( !ConvexBound.userSpecifiedK )
+		{
+		if( ConvexBound.seenLeaves <= 50 )
+			{
+			ConvexBound.k=2;
+			}
+		else
+		if( ConvexBound.seenLeaves <= 100 )
+			{
+			ConvexBound.k=3;
+			}
+		else
+		ConvexBound.k = ((int)Math.ceil( ConvexBound.seenLeaves / 25 )) - 1;
+
+		//! The '25' in the above line is probably far too pessimistic, but the overflow errors
+		//! can be extremely deceptive and difficult to detect, so be careful if you lower it
+
+		System.out.println("// Setting k to the pessimistic but safe value of "+ConvexBound.k);
+		}
+
+	//! ------------------------
+	//! Now, initialize the h arrays in all the TreeNodes
+
+	Enumeration e = ConvexBound.these_need_h_array.elements();
+
+	while( e.hasMoreElements() )
+		{
+		TreeNode node = (TreeNode) e.nextElement();
+
+		node.create_h_array();
+		}
+
+	// -----------------------
+
+	System.out.println("// Only considering convex characters where each state has at least "+ConvexBound.k+" taxa.");	
+
+	ConvexBound.t1.count();
+	
+	long total = t1.g;
+
+	ConvexBound.t2.count();
+
+	long totalT2 = t2.g;
+	
+	System.out.println("// Total convex characters in T1 (with at least "+ConvexBound.k+" taxa per state) = "+total);
+	System.out.println("// Total convex characters in T2 (with at least "+ConvexBound.k+" taxa per state) = "+totalT2);
+
+	if( (total < 0) || (totalT2 < 0) )
+		{
+		System.out.println("Error! Due to number of taxa the number of convex characters has become too large: we have run out of bits. Exiting.");
+		System.out.println("For -k 1 at the very most 46 taxa can be handled, for -k 2 at the very most 95 (on my 64 bit system...)");
+		System.exit(0);
+		}
+
+			
+		if( ConvexBound.NUM_SAMPLES == -1 ) System.out.println("// Sampling characters u.a.r., will not terminate unless matching lower and upper bounds are discovered.");
+		else
+		System.out.println("// Sampling "+ConvexBound.NUM_SAMPLES+" characters u.a.r.");
+		
+		int todo = ConvexBound.NUM_SAMPLES;
+
+		int bestDiff = -1;
+		
+		if( seenLeaves <= 3 )
+			{
+			System.out.println("0 = d_MP = d_TBR = 0 <--- MATCHING BOUNDS!");
+
+			System.exit(0);
+			}
+
+		//! trivial upper bound on TBR distance
+		int tbrUB = seenLeaves - 3;
+
+		// int tbrUB = seenLeaves;
+
+		while( (todo > 0) || (ConvexBound.NUM_SAMPLES == -1) )
+			{
+			TreeNode which = null;
+			TreeNode other = null;
+
+			//! this is the size of the space of characters we will sample from
+			long space = 0;
+
+			int whichCode = -1;
+			int otherCode = -1;
+
+			if( Math.random() > 0.5 )
+				{
+				// System.out.println("// Sampling from T1.");
+				which = t1;
+				other = t2;
+
+				whichCode = 0;
+				otherCode = 1;
+
+				space = total;
+				}
+
+			 else	{
+				// System.out.println("// Sampling from T2.");
+				which = t2;
+				other = t1;
+
+				whichCode = 1;
+				otherCode = 0;
+				
+				space = totalT2;
+				}			
+			
+
+			long x;
+			x = ((long) Math.floor( Math.random() * space )) + 1 ;			
+
+			Vector v = which.getCharacter(x);
+		
+			Vector c = v;
+
+			//! this keeps track of the largest state/block in this character
+			int largestBlock = -1;
+
+			for(int loop=1; loop <= c.size(); loop++)
+			{
+
+			Vector state = (Vector) c.elementAt(loop - 1);
+
+			int blockSize = state.size();
+
+			if( blockSize > largestBlock )
+				{
+				largestBlock = blockSize;
+				}
+
+			for(int scan=1; scan <= blockSize; scan++ )
+				{
+				//! This leaf will be set to state 'loop';
+				TreeNode tn = (TreeNode) state.elementAt(scan - 1);
+
+				// System.out.println(tn.name);
+
+				//! This is the leaf from the other tree, will also be set to state 'loop';
+				TreeNode co = numberToLeaf[otherCode][tn.num];
+
+				// System.out.println(co.name);
+
+				if(co.fitchVector == null)
+					{
+					co.fitchVector = new boolean[ConvexBound.numStates];
+					}
+	
+				for(int wipe=0; wipe<co.fitchVector.length; wipe++)
+					{
+					co.fitchVector[wipe] = false;
+					}
+
+				co.fitchVector[loop-1] = true;
+				}
+
+			
+			}
+		
+			int first = c.size() - 1;	//! it's convex on first tree so parsimony score is just states - 1;
+			int second = other.computeParsimony();
+
+			int diff = Math.abs(first-second);
+			if( diff > bestDiff )
+				{
+				bestDiff = diff;
+				System.out.println("**** Discovered a new lower bound on d_MP: "+bestDiff);
+				System.out.println(bestDiff + " <= d_MP <= d_TBR <= "+tbrUB);
+				if(!QUIET) System.out.println("Achieved by this character:");
+				if(!QUIET) System.out.print(x + ": ");
+				if(!QUIET) TreeNode.printCharacter(v);		
+				if(!QUIET) System.out.println("Sampled tree scores "+first+" and other tree scores "+second);
+				if(!QUIET) if( whichCode == 0 ) System.out.println("Sampled tree = T1"); else System.out.println("Sampled tree = T2");
+				}
+
+			if( (diff == 0) && (first < tbrUB) && (first >= bestDiff) )
+				{
+				//! Aha! The character is convex on both trees, and has fewer components than our
+				// best UB, so this -might- induce a better
+				//! agreement forest (i.e. a better upper bound). The components don't overlap (this
+				//! is guaranteed by convexity), but we have to check that the components
+				//! are compatible. If each component has at most 3 taxa this is automatic.
+				//! to test compatibility of components that have >= 4 taxa requires more
+				//! algorithmic effort, but might be a very useful way of 'discovering' upper bounds
+
+				boolean isAF = false;
+
+				// System.out.println("Largest block: "+largestBlock);
+
+				if( largestBlock <= 3 )
+					{
+					isAF = true;
+					// System.out.println("Got lucky....");
+					}
+				else
+				if( AGGRESSIVE == true )
+					{
+					// System.out.println("Some components are size > 3, running full AF check on this character:");
+
+					isAF = true; 
+
+					//! Ok, let's check whether this really is an agreement forest. This code is not optimized
+					//! and therefore quite slow	
+
+					//! loop through the blocks of the partition (i.e. the potential components)
+
+					giveup: for(int loop = 1; loop <= c.size(); loop++ )
+						{
+						Vector state = (Vector) c.elementAt(loop - 1);
+
+						//! stateSize = number of leaves in this component
+			
+						int stateSize = state.size();			
+						if( stateSize <= 3 ) continue;	//! is a small component so definitely topologically the same in both trees
+
+						//! check whether all the quartets in this component are the same in both trees
+
+						for( int p = 0; p<stateSize; p++ )
+						for( int q = (p+1); q<stateSize; q++ )
+						for( int r = (q+1); r<stateSize; r++ )
+						for( int u = (r+1); u<stateSize; u++ )
+							{
+							int alpha = ((TreeNode) state.elementAt(p)).num;
+							int beta = ((TreeNode) state.elementAt(q)).num;
+							int gamma = ((TreeNode) state.elementAt(r)).num;
+							int delta = ((TreeNode) state.elementAt(u)).num;
+
+							if( !isQuartetCompatible(alpha,beta,gamma,delta) )
+								{
+								isAF = false;
+								break giveup;
+								}
+							}
+
+						}				
+
+					} // end if aggressive
+
+
+				if( isAF )
+					{
+					//! Aha! we have discovered a forest
+					//! 'first' will be the induced upper bound on TBR
+
+					if( first < tbrUB )
+						{
+						System.out.println("**** Discovered a new upper bound on d_TBR: "+first);
+						tbrUB = first;
+
+						if(!QUIET) System.out.println("Achieved by this forest:");
+						if(!QUIET) System.out.print(x + ": ");
+						if(!QUIET) TreeNode.printCharacter(v);		
+
+						System.out.println(bestDiff + " <= d_MP <= d_TBR <= "+tbrUB);
+						}
+
+					}
+
+				}
+
+
+			if( tbrUB == bestDiff )
+				{
+				if(!QUIET) System.out.println("**** FANTASTIC: discovered proof that dMP = dTBR = "+tbrUB);
+				System.out.println(bestDiff + " = d_MP = d_TBR = "+tbrUB+" <--- MATCHING BOUNDS!");
+				System.exit(0);
+				}
+
+			// I removed this because I don't see much point having a fixed number of samples...but it's easy enough to reinstate
+			// if desired
+			// todo--;
+			}
+		
+		
+		
+	}
+
+
+}
+
+
+
+void descendant_list():
+{ int children = 0;}
+{
+  "(" { 
+	children++;
+	tn = new TreeNode(); 
+	tn.setParent(current_node);
+	current_node.addChild(tn);
+	current_node = tn;
+      } 
+  subtree() 
+  ( "," {
+	  children++;
+	  tn = new TreeNode();
+	  tn.setParent(current_node);
+	  current_node.addChild(tn);
+	  current_node = tn;
+	}
+    subtree() 
+    )*
+  ")"
+}
+
+
+/** function subtree will set name, length and weight for each tree node */
+void subtree():
+{ 
+  String s;
+  double len; 
+}
+{
+  descendant_list() {}
+  ( s = label() {}    )? 
+  ( ":" len = branch_length() {}	
+    )? { current_node = current_node.getParent(); }
+| ( s = label() { leaves++;
+		int x = getLeafNumber(s);
+		current_node.setName(s); 
+		current_node.setNumber(x);
+		}
+    )?
+  ( ":" len = branch_length() {} 
+    )?
+{ current_node = current_node.parent; }
+}
+
+String label(): 
+{ String s; }
+{ 
+  s = unquoted_label() { return s; }
+| s = quoted_label() { return s; } 
+}
+
+/** for each unquoted label, we need to replace '_' by ' ' */
+String unquoted_label():
+{ Token t; }
+{ 
+  t = <unquoted_string> { String s = new String(t.toString());
+				return s;
+			  // return s.replace('_', ' ');
+ 				}
+| t = <double_number> { return new String(t.toString()); }
+}
+
+/** for each quoted label, we remove double quotes from the string */
+String quoted_label():
+{ Token t; }
+{ 
+  t = <quoted_string> { String s = new String(t.toString());
+			return s.substring(1, s.length()-1); 
+		      }
+}
+
+double branch_length():
+{ Token t; }
+{
+  t = <double_number> { return Double.parseDouble(t.toString()); } 
+}
+
+
+TOKEN:
+{
+  <#digit: ["0"-"9"] >
+| <#alpha: ["a"-"z", "A"-"Z"] >
+| <#only_quote_char: [ "(", ")", "[", "]", ":", ";", "," ]>
+| <#single_quote: "''">
+| <#both_char: [ "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", 
+		 "-", "_", "+", "=", "{", "}", "|", ".", "?", "/", 
+		 "[", "]", "<", ">" ] > 
+| <#whitespace: [ " " , "\t" , "\n" , "\r" ] >
+| <#unquoted_char: ( <digit> | <alpha> | <both_char> ) >
+| <#quoted_char: ( <unquoted_char> | <whitespace> | <only_quote_char> )>
+| <#number: ( <digit> )+ ("." ( <digit> )* )? | "." ( <digit> )+ >
+| <#exponent: ["e", "E"] ("+"|"-")? (<digit>)+ >
+| <double_number: ("+"|"-")? <number> (<exponent>)? >
+| <unquoted_string: ( <unquoted_char> )+ >
+| <quoted_string: "'" ( <quoted_char> | <single_quote> )+ "'" >
+}
