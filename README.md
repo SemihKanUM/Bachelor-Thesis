@@ -1,6 +1,8 @@
 
 # Split-or-Decompose MAF (Unrooted) — Java Implementation
 
+**YOU CAN FIND THE THESIS REPORT ABOVE**
+
 This project implements two fixed-parameter algorithms for computing Maximum Agreement Forests (MAF) on **unrooted** phylogenetic trees:
 
 - **Chen’s algorithm** (baseline)
